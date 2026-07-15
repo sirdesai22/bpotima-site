@@ -1,398 +1,328 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { scenarios, type ScenarioData, type AuditEntry } from "@content/demo-scenarios";
+import { scenarios, type Scenario } from "@content/demo-scenarios";
 
 type Phase = "idle" | "extracting" | "rules" | "verdict" | "auditing" | "complete";
-
 type TraceTarget =
-  | { type: "verdict" }
+  | { type: "field"; id: string }
   | { type: "rule"; id: string }
-  | { type: "field"; label: string }
+  | { type: "decision" }
   | null;
 
-function useSequencer(scenarioId: string) {
+function useSequencer() {
   const [phase, setPhase] = useState<Phase>("idle");
-  const [visibleFields, setVisibleFields] = useState(0);
   const [visibleRules, setVisibleRules] = useState(0);
-  const [visibleAudit, setVisibleAudit] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const reset = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setPhase("idle");
-    setVisibleFields(0);
-    setVisibleRules(0);
-    setVisibleAudit(0);
-  }, []);
+  const [auditIndex, setAuditIndex] = useState(0);
 
   const start = useCallback(() => {
-    reset();
-    const scenario = scenarios.find((s) => s.id === scenarioId);
-    if (!scenario) return;
-
-    const fd = (n: number) => setTimeout(() => setVisibleFields(n), n * 500);
-    const rd = (n: number) => setTimeout(() => setVisibleRules(n), n * 400);
-    const ad = (n: number) => setTimeout(() => setVisibleAudit(n), n * 200);
-
     setPhase("extracting");
-    setTimeout(() => {
-      for (let i = 1; i <= scenario.extractedFields.length; i++) fd(i);
-    }, 300);
-
-    setTimeout(() => {
-      setPhase("rules");
-      for (let i = 1; i <= scenario.rules.length; i++) rd(i);
-    }, scenario.extractedFields.length * 500 + 800);
-
-    setTimeout(() => {
-      setPhase("verdict");
-    }, scenario.extractedFields.length * 500 + scenario.rules.length * 400 + 1200);
-
-    setTimeout(() => {
-      setPhase("auditing");
-      for (let i = 1; i <= scenario.auditLog.length; i++) ad(i);
-    }, scenario.extractedFields.length * 500 + scenario.rules.length * 400 + 2000);
-
-    setTimeout(() => {
-      setPhase("complete");
-    }, scenario.extractedFields.length * 500 + scenario.rules.length * 400 + scenario.auditLog.length * 200 + 2600);
-  }, [scenarioId, reset]);
+    setVisibleRules(0);
+    setAuditIndex(0);
+    setTimeout(() => setPhase("rules"), 1200);
+    setTimeout(() => setPhase("verdict"), 1800);
+    setTimeout(() => setPhase("auditing"), 2400);
+  }, []);
 
   useEffect(() => {
-    start();
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [start]);
+    if (phase !== "auditing") return;
+    if (auditIndex >= 20) return;
+    const t = setTimeout(() => setAuditIndex((i) => i + 1), 250);
+    return () => clearTimeout(t);
+  }, [phase, auditIndex]);
 
-  return { phase, visibleFields, visibleRules, visibleAudit, reset };
+  const effectivePhase: Phase =
+    phase === "auditing" && auditIndex >= 20 ? "complete" : phase;
+
+  return {
+    phase: effectivePhase,
+    visibleRules,
+    auditIndex,
+    start,
+    reset: useCallback(() => setPhase("idle"), []),
+  };
 }
 
-const statusStyles: Record<string, string> = {
-  approve: "bg-approve/10 text-approve border-approve/20",
-  escalate: "bg-escalate/10 text-escalate border-escalate/20",
-  reject: "bg-reject/10 text-reject border-reject/20",
-};
-
-const statusLabel: Record<string, string> = {
-  approve: "APPROVE",
-  escalate: "ESCALATE",
-  reject: "REJECT",
-};
-
-function getHighlightSet(
-  scenario: ScenarioData,
+function getHighlightedIds(
+  scenario: Scenario,
   target: TraceTarget
-): Set<string> | null {
-  if (!target) return null;
-  const set = new Set<string>();
+): { fields: Set<string>; rules: Set<string> } {
+  const fields = new Set<string>();
+  const rules = new Set<string>();
 
-  if (target.type === "verdict") {
-    for (const ruleId of scenario.verdict.dependsOn) {
-      set.add(`rule:${ruleId}`);
-      const rule = scenario.rules.find((r) => r.id === ruleId);
-      if (rule) {
-        for (const fieldLabel of rule.dependsOn) {
-          set.add(`field:${fieldLabel}`);
-        }
-      }
-    }
+  if (!target) return { fields, rules };
+
+  if (target.type === "decision") {
+    const decisionRules = scenario.rules.filter(() => true);
+    decisionRules.forEach((r) => {
+      rules.add(r.id);
+      r.dependsOn.forEach((fid) => fields.add(fid));
+    });
   } else if (target.type === "rule") {
-    set.add(`rule:${target.id}`);
+    rules.add(target.id);
     const rule = scenario.rules.find((r) => r.id === target.id);
-    if (rule) {
-      for (const fieldLabel of rule.dependsOn) {
-        set.add(`field:${fieldLabel}`);
-      }
-    }
+    rule?.dependsOn.forEach((fid) => fields.add(fid));
   } else if (target.type === "field") {
-    set.add(`field:${target.label}`);
+    fields.add(target.id);
   }
 
-  return set;
+  return { fields, rules };
 }
 
-function getHighlightedSourceLines(scenario: ScenarioData, target: TraceTarget): Set<number> | null {
-  if (!target) return null;
-  const set = new Set<number>();
+function buildBreadcrumb(scenario: Scenario, target: TraceTarget): string[] {
+  if (!target) return [];
+  const steps: string[] = [];
 
-  if (target.type === "verdict") {
-    for (const ruleId of scenario.verdict.dependsOn) {
-      const rule = scenario.rules.find((r) => r.id === ruleId);
-      if (rule) {
-        for (const fieldLabel of rule.dependsOn) {
-          const field = scenario.extractedFields.find((f) => f.label === fieldLabel);
-          if (field) field.dependsOn.forEach((l) => set.add(l));
-        }
+  if (target.type === "decision") {
+    steps.push("Decision");
+    const decisionRules = scenario.rules;
+    const last = decisionRules[decisionRules.length - 1];
+    if (last) {
+      steps.push(`Rule: ${last.label}`);
+      const dep = last.dependsOn[last.dependsOn.length - 1];
+      const field = dep ? scenario.fields.find((f) => f.id === dep) : undefined;
+      if (field) {
+        steps.push(`${field.label}: ${formatVal(field.value)}`);
+        steps.push(`Source line ${field.sourceLine + 1}`);
       }
     }
   } else if (target.type === "rule") {
+    steps.push(`Rule: ${target.id}`);
     const rule = scenario.rules.find((r) => r.id === target.id);
     if (rule) {
-      for (const fieldLabel of rule.dependsOn) {
-        const field = scenario.extractedFields.find((f) => f.label === fieldLabel);
-        if (field) field.dependsOn.forEach((l) => set.add(l));
+      const dep = rule.dependsOn[rule.dependsOn.length - 1];
+      const field = dep ? scenario.fields.find((f) => f.id === dep) : undefined;
+      if (field) {
+        steps.push(`${field.label}: ${formatVal(field.value)}`);
+        steps.push(`Source line ${field.sourceLine + 1}`);
       }
     }
   } else if (target.type === "field") {
-    const field = scenario.extractedFields.find((f) => f.label === target.label);
-    if (field) field.dependsOn.forEach((l) => set.add(l));
-  }
-
-  return set;
-}
-
-function BreadcrumbStrip({
-  scenario,
-  target,
-  onClear,
-}: {
-  scenario: ScenarioData;
-  target: TraceTarget;
-  onClear: () => void;
-}) {
-  if (!target) return null;
-
-  const crumbs: string[] = [];
-
-  if (target.type === "verdict") {
-    crumbs.push("Decision");
-    for (const id of scenario.verdict.dependsOn) {
-      const r = scenario.rules.find((rule) => rule.id === id);
-      crumbs.push(r ? `${r.id}: ${r.condition}` : id);
-    }
-  } else if (target.type === "rule") {
-    const rule = scenario.rules.find((r) => r.id === target.id);
-    if (rule) {
-      crumbs.push(`${rule.id}: ${rule.condition}`);
-      crumbs.push(...rule.dependsOn);
-    }
-  } else if (target.type === "field") {
-    const field = scenario.extractedFields.find((f) => f.label === target.label);
+    const field = scenario.fields.find((f) => f.id === target.id);
     if (field) {
-      crumbs.push(`${field.label}: ${field.value}`);
-      crumbs.push(...field.dependsOn.map((l) => `source: L${l}`));
+      steps.push(`${field.label}: ${formatVal(field.value)}`);
+      steps.push(`Source line ${field.sourceLine + 1}`);
     }
   }
 
-  if (crumbs.length === 0) return null;
+  return steps;
+}
+
+function formatVal(v: string | number | boolean): string {
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") {
+    if (v >= 1000) return `$${v.toLocaleString()}`;
+    if (Number.isInteger(v)) return `${v}`;
+    return `${v}`;
+  }
+  return v;
+}
+
+function VerdictBadge({
+  verdict,
+  hasPulsed,
+}: {
+  verdict: string;
+  hasPulsed: boolean;
+}) {
+  const colors: Record<string, string> = {
+    approve: "bg-approve/10 text-approve border-approve/30",
+    escalate: "bg-escalate/10 text-escalate border-escalate/30",
+    reject: "bg-reject/10 text-reject border-reject/30",
+  };
 
   return (
-    <div className="flex items-center gap-1.5 font-mono text-[11px] text-ink-soft/70 overflow-x-auto whitespace-nowrap pb-1">
-      {crumbs.map((crumb, i) => (
-        <span key={i} className="flex items-center gap-1.5">
-          {i > 0 && <span className="text-ink-soft/30">&larr;</span>}
-          <span>{crumb}</span>
-        </span>
-      ))}
-      <button
-        onClick={onClear}
-        className="ml-2 text-ink-soft/40 hover:text-ink-soft transition-colors"
-      >
-        &times;
-      </button>
-    </div>
+    <span
+      className={`inline-block font-mono text-xs font-bold px-3 py-1 rounded border transition-all ${
+        colors[verdict] || colors.approve
+      } ${!hasPulsed ? "animate-pulse" : ""}`}
+      style={{ animationDuration: "2s" }}
+    >
+      {verdict.toUpperCase()}
+    </span>
   );
 }
 
 function EvidencePanel({
   scenario,
-  visibleFields,
+  phase,
   traceTarget,
-  highlightSet,
   onFieldClick,
-  isComplete,
 }: {
-  scenario: ScenarioData;
-  visibleFields: number;
+  scenario: Scenario;
+  phase: Phase;
   traceTarget: TraceTarget;
-  highlightSet: Set<string> | null;
-  onFieldClick: (label: string) => void;
-  isComplete: boolean;
+  onFieldClick: (id: string) => void;
 }) {
-  const sourceHighlight = getHighlightedSourceLines(scenario, traceTarget);
-  const isDimmed = highlightSet !== null;
+  const isComplete = phase === "complete";
+  const { fields: hlFields } = getHighlightedIds(scenario, traceTarget);
+  const visibleCount = phase === "extracting" || phase === "idle" ? 0 : scenario.fields.length;
+
+  const lines = scenario.evidenceText.split("\n");
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <h3 className="font-sans text-xs font-semibold uppercase tracking-widest text-ink-soft">
         Evidence
       </h3>
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <div className="border-b border-line bg-bg px-3 py-1.5 font-mono text-[11px] text-ink-soft">
-          {scenario.id === "insurance-claim"
-            ? "BP-2407-1832.pdf"
-            : "SME-2024-0551.pdf"}
-        </div>
-        <div className="p-3 space-y-[2px] font-mono text-[12px] leading-relaxed transition-opacity duration-150">
-          {scenario.document.map((line, i) => {
-            const isExtracted = line.highlight;
-            const sourceMatch = sourceHighlight && sourceHighlight.has(line.sourceLine);
-            const baseHighlight = isExtracted && !isDimmed;
-            return (
-              <div
-                key={i}
-                className={`${
-                  baseHighlight
-                    ? "bg-highlight/8 border-l-2 border-highlight/30 pl-2 -ml-3 pr-2 py-[1px]"
-                    : sourceMatch
-                      ? "bg-highlight/15 border-l-2 border-highlight/50 pl-2 -ml-3 pr-2 py-[1px]"
-                      : "pl-2"
-                } text-ink/80 transition-all duration-150 ${
-                  isDimmed
-                    ? sourceMatch
-                      ? "opacity-100"
-                      : "opacity-30"
-                    : "opacity-100"
-                }`}
-              >
-                <span className="text-ink-soft/50 mr-2 select-none">
-                  {String(line.sourceLine).padStart(2, "0")}
-                </span>
-                {line.text}
-              </div>
+      <div className="rounded border border-line bg-surface p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+        {lines.map((line, i) => {
+          const isExtracted = scenario.fields.some((f) => f.sourceLine === i);
+          const isHighlighted =
+            isExtracted &&
+            scenario.fields.some(
+              (f) => f.sourceLine === i && hlFields.has(f.id)
             );
-          })}
-        </div>
+          return (
+            <div
+              key={i}
+              className={`py-0.5 transition-opacity duration-150 ${
+                traceTarget && !isHighlighted && isExtracted
+                  ? "opacity-30"
+                  : traceTarget && !isExtracted
+                    ? "opacity-30"
+                    : ""
+              } ${
+                isExtracted
+                  ? isHighlighted
+                    ? "bg-highlight/15 rounded px-0.5 -mx-0.5"
+                    : "bg-highlight/8 rounded px-0.5 -mx-0.5"
+                  : ""
+              }`}
+            >
+              <span className="text-ink-soft/40 select-none mr-2">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              {line}
+            </div>
+          );
+        })}
       </div>
-      <div className="space-y-2">
-        <h4 className="font-sans text-[11px] font-semibold uppercase tracking-widest text-ink-soft">
-          Extracted fields
-        </h4>
-        <div className="space-y-1.5">
-          {scenario.extractedFields.map((field, i) => {
-            const inTrace = highlightSet?.has(`field:${field.label}`);
-            return (
-              <AnimatePresence key={field.label}>
-                {i < visibleFields && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    onClick={() => {
-                      if (isComplete) onFieldClick(field.label);
-                    }}
-                    className={`flex items-center justify-between rounded border px-3 py-1.5 transition-all duration-150 ${
-                      isComplete
-                        ? `cursor-pointer hover:border-highlight/40 ${
-                            traceTarget || highlightSet
-                              ? inTrace
-                                ? "border-highlight/40 bg-highlight/8 opacity-100"
-                                : "border-line bg-surface opacity-30"
-                              : "border-line bg-surface hover:bg-highlight/5"
-                          }`
-                        : "border-line bg-surface"
-                    }`}
-                  >
-                    <span className="font-sans text-xs text-ink-soft">
-                      {field.label}
-                      {isComplete && (
-                        <span className="ml-2 font-sans text-[10px] text-accent underline decoration-dotted underline-offset-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          trace
-                        </span>
-                      )}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm text-ink">{field.value}</span>
-                      <span className="rounded bg-highlight/10 px-1.5 py-0.5 font-mono text-[10px] text-highlight">
-                        L{field.sourceLine}
-                      </span>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            );
-          })}
-        </div>
-      </div>
+
+      <AnimatePresence>
+        {phase !== "idle" && phase !== "extracting" && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="space-y-1.5"
+          >
+            {scenario.fields.slice(0, visibleCount).map((f, i) => {
+              const isDimmed = traceTarget && !hlFields.has(f.id);
+              return (
+                <motion.div
+                  key={f.id}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{
+                    opacity: traceTarget && !hlFields.has(f.id) ? 0.3 : 1,
+                    y: 0,
+                  }}
+                  transition={{ duration: 0.15, delay: i * 0.1 }}
+                  onClick={() => isComplete && onFieldClick(f.id)}
+                  className={`flex items-center justify-between py-1.5 px-3 rounded border text-sm ${
+                    isComplete
+                      ? "cursor-pointer border-accent/20 hover:border-accent/50"
+                      : "border-transparent"
+                  } ${isDimmed ? "opacity-30" : ""}`}
+                >
+                  <span className="font-sans text-ink-soft">{f.label}</span>
+                  <span className="font-mono text-ink font-medium">
+                    {formatVal(f.value)}
+                  </span>
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 function RulesPanel({
   scenario,
+  phase,
   visibleRules,
   traceTarget,
-  highlightSet,
   onRuleClick,
-  isComplete,
 }: {
-  scenario: ScenarioData;
+  scenario: Scenario;
+  phase: Phase;
   visibleRules: number;
   traceTarget: TraceTarget;
-  highlightSet: Set<string> | null;
-  onRuleClick: (ruleId: string) => void;
-  isComplete: boolean;
+  onRuleClick: (id: string) => void;
 }) {
+  const isComplete = phase === "complete";
+  const { rules: hlRules } = getHighlightedIds(scenario, traceTarget);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <h3 className="font-sans text-xs font-semibold uppercase tracking-widest text-ink-soft">
         Rules
       </h3>
       <div className="space-y-2">
-        {scenario.rules.map((rule, i) => {
-          const inTrace = highlightSet?.has(`rule:${rule.id}`);
-          return (
-            <AnimatePresence key={rule.id}>
-              {i < visibleRules && (
-                <motion.div
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.3 }}
-                  onClick={() => {
-                    if (isComplete) onRuleClick(rule.id);
-                  }}
-                  className={`rounded border px-3 py-2 transition-all duration-150 ${
-                    rule.passed
-                      ? "border-approve/20 bg-approve/5"
-                      : "border-escalate/20 bg-escalate/5"
-                  } ${
-                    isComplete
-                      ? `cursor-pointer ${
-                          traceTarget || highlightSet
-                            ? inTrace
-                              ? "opacity-100"
-                              : "opacity-30"
-                            : "hover:border-approve/40"
-                        }`
-                      : ""
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-mono text-[11px] text-ink-soft shrink-0">{rule.id}</span>
-                        <span className="font-mono text-[11px] text-ink/70 truncate">{rule.condition}</span>
-                      </div>
-                      <p className="font-sans text-sm text-ink leading-snug">
-                        {rule.display}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                      <span
-                        className={`font-mono text-[11px] font-semibold ${
-                          rule.passed ? "text-approve" : "text-escalate"
-                        }`}
-                      >
-                        {rule.passed ? "PASS" : "FLAG"}
-                      </span>
-                    </div>
+        <AnimatePresence>
+          {scenario.rules.slice(0, visibleRules).map((r, i) => {
+            const isDimmed = traceTarget && !hlRules.has(r.id);
+            return (
+              <motion.div
+                key={r.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{
+                  opacity: isDimmed ? 0.3 : 1,
+                  y: 0,
+                }}
+                transition={{ duration: 0.15, delay: i * 0.05 }}
+                onClick={() => isComplete && onRuleClick(r.id)}
+                className={`rounded border p-3 ${
+                  isComplete
+                    ? "cursor-pointer border-accent/20 hover:border-accent/50"
+                    : "border-line"
+                } ${r.passed ? "bg-approve/5" : "bg-escalate/5"}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-sans text-sm font-medium text-ink">
+                    {r.label}
+                  </span>
+                  <span
+                    className={`font-mono text-[11px] font-semibold whitespace-nowrap ${
+                      r.passed ? "text-approve" : "text-escalate"
+                    }`}
+                  >
+                    {r.passed ? "PASS" : "FLAG"}
+                  </span>
+                </div>
+                <p className="font-sans text-xs text-ink-soft mt-1 leading-relaxed">
+                  {r.condition}
+                </p>
+                {isComplete && (
+                  <div className="mt-1 text-right">
+                    <span className="font-sans text-[10px] text-accent underline decoration-dotted underline-offset-2 hover:no-underline transition-opacity">
+                      trace
+                    </span>
                   </div>
-                  {isComplete && (
-                    <div className="mt-1 text-right">
-                      <span className="font-sans text-[10px] text-accent underline decoration-dotted underline-offset-2 hover:no-underline transition-opacity">
-                        trace
-                      </span>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          );
-        })}
+                )}
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
       </div>
+    </div>
+  );
+}
+
+function BreadcrumbStrip({ steps }: { steps: string[] }) {
+  if (steps.length === 0) return null;
+  return (
+    <div className="rounded border border-highlight/30 bg-highlight/8 px-3 py-2 overflow-hidden text-xs font-mono text-ink-soft flex flex-wrap items-center gap-1">
+      {steps.map((s, i) => (
+        <span key={i} className="flex items-center gap-1">
+          {i > 0 && <span className="text-ink-soft/30">&larr;</span>}
+          <span className={i === steps.length - 1 ? "text-accent font-medium" : ""}>
+            {s}
+          </span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -400,127 +330,104 @@ function RulesPanel({
 function DecisionPanel({
   scenario,
   phase,
-  visibleAudit,
+  auditIndex,
   traceTarget,
-  highlightSet,
-  onVerdictClick,
+  onDecisionClick,
   onClearTrace,
-  hasCompletedOnce,
+  hasPulsed,
 }: {
-  scenario: ScenarioData;
+  scenario: Scenario;
   phase: Phase;
-  visibleAudit: number;
+  auditIndex: number;
   traceTarget: TraceTarget;
-  highlightSet: Set<string> | null;
-  onVerdictClick: () => void;
+  onDecisionClick: () => void;
   onClearTrace: () => void;
-  hasCompletedOnce: boolean;
+  hasPulsed: boolean;
 }) {
   const isComplete = phase === "complete";
+  const isVerdictVisible =
+    phase === "verdict" || phase === "auditing" || phase === "complete";
+  const breadcrumb = buildBreadcrumb(scenario, traceTarget);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <h3 className="font-sans text-xs font-semibold uppercase tracking-widest text-ink-soft">
         Decision
       </h3>
 
-      {isComplete && traceTarget && (
-        <div className="rounded border border-line bg-bg px-3 py-2 overflow-hidden">
-          <BreadcrumbStrip
-            scenario={scenario}
-            target={traceTarget}
-            onClear={onClearTrace}
-          />
-        </div>
-      )}
+      {breadcrumb.length > 0 && <BreadcrumbStrip steps={breadcrumb} />}
 
       <AnimatePresence>
-        {(phase === "verdict" || phase === "auditing" || phase === "complete") && (
+        {isVerdictVisible && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
             onClick={() => {
-              if (isComplete) onVerdictClick();
+              if (isComplete) {
+                if (traceTarget?.type === "decision") onClearTrace();
+                else onDecisionClick();
+              }
             }}
-            className={`rounded-lg border p-4 transition-all duration-150 ${
-              statusStyles[scenario.verdict.status] || ""
-            } ${
-              isComplete && highlightSet
-                ? `cursor-pointer ${
-                    traceTarget?.type === "verdict"
-                      ? "opacity-100 ring-2 ring-highlight/20"
-                      : "opacity-30"
-                  }`
-                : isComplete && traceTarget === null
-                  ? "cursor-pointer"
-                  : ""
+            className={`rounded border p-4 ${
+              isComplete
+                ? "cursor-pointer border-accent/20 hover:border-accent/50"
+                : "border-line"
             }`}
           >
-            <div className="flex items-center gap-2 mb-2">
-              <motion.span
-                animate={
-                  hasCompletedOnce
-                    ? {}
-                    : {
-                        scale: [1, 1.08, 1],
-                        transition: { duration: 0.5, delay: 0.3 },
-                      }
-                }
-                className={`inline-flex items-center rounded px-2 py-0.5 font-mono text-xs font-bold ${
-                  scenario.verdict.status === "approve"
-                    ? "bg-approve/15 text-approve"
-                    : scenario.verdict.status === "escalate"
-                      ? "bg-escalate/15 text-escalate"
-                      : "bg-reject/15 text-reject"
-                }`}
-              >
-                {statusLabel[scenario.verdict.status]}
-              </motion.span>
-              {isComplete && (
-                <span className="font-sans text-[11px] text-accent underline decoration-dotted underline-offset-2 hover:no-underline cursor-pointer">
-                  click to trace
-                </span>
-              )}
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-sans text-sm font-semibold text-ink">Verdict</span>
+              <div className="flex items-center gap-2">
+                <VerdictBadge
+                  verdict={scenario.verdict}
+                  hasPulsed={hasPulsed}
+                />
+                {isComplete && (
+                  <span className="font-sans text-[11px] text-accent underline decoration-dotted underline-offset-2 hover:no-underline cursor-pointer">
+                    click to trace
+                  </span>
+                )}
+              </div>
             </div>
-            <p className="font-sans text-sm leading-relaxed text-ink/90">
-              {scenario.verdict.reasoning}
+            <p className="font-sans text-sm leading-relaxed text-ink/80">
+              {scenario.reasoning}
             </p>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {(phase === "auditing" || phase === "complete") && (
-        <div className="space-y-2">
-          <h4 className="font-sans text-[11px] font-semibold uppercase tracking-widest text-ink-soft">
-            Audit trail
-          </h4>
-          <div className="rounded-lg border border-line overflow-hidden">
-            <div className="divide-y divide-line max-h-48 overflow-y-auto">
-              {scenario.auditLog.map((entry: AuditEntry, i: number) => (
-                <AnimatePresence key={entry.hash}>
-                  {i < visibleAudit && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      transition={{ duration: 0.25 }}
-                      className="px-3 py-1.5 flex items-center gap-3 font-mono text-[11px]"
-                    >
-                      <span className="text-ink-soft/50 w-20 shrink-0">
-                        {entry.timestamp.split("T")[1].slice(0, 8)}
-                      </span>
-                      <span className="text-ink/80 flex-1 truncate">{entry.event}</span>
-                      <span className="text-ink-soft/40 font-mono text-[10px] hidden sm:inline">
-                        {entry.hash.slice(0, 8)}
-                      </span>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+      <AnimatePresence>
+        {phase === "auditing" || phase === "complete" ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="rounded border border-line bg-surface p-3"
+          >
+            <h4 className="font-sans text-[10px] font-semibold uppercase tracking-widest text-ink-soft mb-2">
+              Audit Trail
+            </h4>
+            <div className="space-y-1">
+              {scenario.auditLog.slice(0, auditIndex).map((entry, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -4 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex items-center gap-2 font-mono text-[11px] text-ink-soft"
+                >
+                  <span className="text-ink-soft/40 w-16 shrink-0">
+                    {entry.timestamp.split("T")[1].slice(0, 8)}
+                  </span>
+                  <span className="flex-1 truncate">{entry.event}</span>
+                  <span className="text-ink-soft/40 hidden sm:inline">
+                    {entry.hash.slice(0, 8)}
+                  </span>
+                </motion.div>
               ))}
             </div>
-          </div>
-        </div>
-      )}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       {isComplete && (
         <motion.button
@@ -530,7 +437,7 @@ function DecisionPanel({
           onClick={() => {
             const headers = "Timestamp,Event,Hash";
             const rows = scenario.auditLog
-              .map((e: AuditEntry) => `${e.timestamp},"${e.event}",${e.hash}`)
+              .map((e) => `${e.timestamp},"${e.event}",${e.hash}`)
               .join("\n");
             const csv = `${headers}\n${rows}`;
             const blob = new Blob([csv], { type: "text/csv" });
@@ -541,7 +448,7 @@ function DecisionPanel({
             a.click();
             URL.revokeObjectURL(url);
           }}
-          className="w-full rounded-md border border-line bg-surface px-3 py-2 font-mono text-xs text-ink-soft hover:bg-bg hover:text-ink transition-colors cursor-pointer"
+          className="w-full rounded border border-line bg-surface px-3 py-2 font-mono text-xs text-ink-soft hover:bg-bg hover:text-ink transition-colors cursor-pointer"
         >
           Export .csv
         </motion.button>
@@ -550,352 +457,174 @@ function DecisionPanel({
   );
 }
 
-function CounterfactualSliders({ scenario }: { scenario: ScenarioData }) {
-  const cf = scenario.counterfactual;
-  if (!cf) return null;
-
-  const [fieldValue, setFieldValue] = useState(cf.fieldDefault);
-  const [thresholdValue, setThresholdValue] = useState(cf.thresholdDefault);
-
-  function formatVal(v: number) {
-    return cf.fieldUnit ? `${cf.fieldUnit}${v.toLocaleString()}` : v.toString();
-  }
-
-  function formatThreshold(v: number) {
-    return cf.thresholdUnit ? `${cf.thresholdUnit}${v.toLocaleString()}` : v.toString();
-  }
-
-  const fieldChanged = fieldValue !== cf.fieldDefault;
-  const thresholdChanged = thresholdValue !== cf.thresholdDefault;
-  const isModified = fieldChanged || thresholdChanged;
-
-  const passes =
-    cf.comparator === "lt"
-      ? fieldValue < thresholdValue
-      : cf.comparator === "lte"
-        ? fieldValue <= thresholdValue
-        : cf.comparator === "gt"
-          ? fieldValue > thresholdValue
-          : fieldValue >= thresholdValue;
-
-  const originalPassed = scenario.rules.find((r) => r.id === cf.ruleId)?.passed ?? true;
-  const flipped = passes !== originalPassed;
-
-  let verdictLabel: string;
-  let verdictDesc: string;
-  if (!isModified) {
-    verdictLabel = statusLabel[scenario.verdict.status];
-    verdictDesc = "Original outcome — no adjustments applied.";
-  } else if (flipped) {
-    verdictLabel = passes ? "APPROVE" : "ESCALATE";
-    const diffSummary = fieldChanged
-      ? `${cf.fieldLabel} moved from ${formatVal(cf.fieldDefault)} \u2192 ${formatVal(fieldValue)}.`
-      : `POLICY-${cf.ruleId} threshold moved from ${cf.comparator === "gte" || cf.comparator === "gt" ? "\u2265" : "\u2264"}${formatThreshold(cf.thresholdDefault)} \u2192 ${cf.comparator === "gte" || cf.comparator === "gt" ? "\u2265" : "\u2264"}${formatThreshold(thresholdValue)}.`;
-    verdictDesc = `What changed: ${diffSummary} ${verdictLabel === "APPROVE" ? "All criteria now satisfied." : "Rule now flags."} Everything else identical.`;
-  } else {
-    verdictLabel = statusLabel[scenario.verdict.status];
-    const diffSummary = fieldChanged
-      ? `${cf.fieldLabel} (${formatVal(fieldValue)}) within threshold (${formatThreshold(thresholdValue)})`
-      : `Threshold adjusted (${formatThreshold(thresholdValue)}) but outcome unchanged`;
-    verdictDesc = `No change in verdict. ${diffSummary}.`;
-  }
-
-  function reset() {
-    setFieldValue(cf.fieldDefault);
-    setThresholdValue(cf.thresholdDefault);
-  }
-
-  const verdictClasses =
-    verdictLabel === "APPROVE" || verdictLabel === "APPROVED"
-      ? "bg-approve/15 text-approve"
-      : "bg-escalate/15 text-escalate";
-
-  const verdictBorderClass =
-    verdictLabel === "APPROVE" || verdictLabel === "APPROVED"
-      ? "border-approve/20 bg-approve/10"
-      : "border-escalate/20 bg-escalate/10";
-
-  return (
-    <div className="mt-12 pt-10 border-t border-line">
-      <h3 className="font-serif text-2xl text-ink mb-2">
-        What would change this?
-      </h3>
-      <p className="font-sans text-sm text-ink-soft mb-8 max-w-xl">
-        Adjust the evidence or the policy rule to see how the decision shifts.
-        Each slider controls a different thing — one is the case fact, one is the client&apos;s rule.
-      </p>
-
-      <div className="grid md:grid-cols-2 gap-6 mb-8">
-        <div className="rounded-lg border border-ink/15 bg-surface p-5">
-          <label className="flex items-center justify-between mb-1">
-            <span className="font-sans text-xs font-semibold text-ink-soft uppercase tracking-widest">
-              Case fact
-            </span>
-            <span className="font-mono text-sm text-ink">
-              {formatVal(fieldValue)}
-            </span>
-          </label>
-          <p className="font-sans text-xs text-ink/80 mb-4">
-            {cf.fieldLabel}
-          </p>
-          <input
-            type="range"
-            min={cf.fieldRange[0]}
-            max={cf.fieldRange[1]}
-            step={cf.fieldStep}
-            value={fieldValue}
-            onChange={(e) => setFieldValue(Number(e.target.value))}
-            className="slider-neutral w-full"
-          />
-          <div className="flex justify-between font-mono text-[10px] text-ink-soft/50 mt-1">
-            <span>{formatVal(cf.fieldRange[0])}</span>
-            <span>{formatVal(cf.fieldRange[1])}</span>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-accent/15 bg-surface p-5">
-          <label className="flex items-center justify-between mb-1">
-            <span className="font-sans text-xs font-semibold text-ink-soft uppercase tracking-widest">
-              Policy threshold
-            </span>
-            <span className="font-mono text-sm text-accent">
-              {cf.comparator === "gte" || cf.comparator === "gt" ? "\u2265" : "\u2264"}
-              {formatThreshold(thresholdValue)}
-            </span>
-          </label>
-          <p className="font-sans text-xs text-ink/80 mb-2">
-            {cf.thresholdLabel}
-          </p>
-          <div className="flex items-center gap-1 mb-3">
-            <span className="font-mono text-[10px] text-ink-soft/60">&#128274;</span>
-            <span className="font-sans text-[10px] text-ink-soft/60">
-              Client-owned &middot; Editable only by {cf.owner}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={cf.thresholdRange[0]}
-            max={cf.thresholdRange[1]}
-            step={cf.thresholdStep}
-            value={thresholdValue}
-            onChange={(e) => setThresholdValue(Number(e.target.value))}
-            className="slider-accent w-full"
-          />
-          <div className="flex justify-between font-mono text-[10px] text-ink-soft/50 mt-1">
-            <span>{formatThreshold(cf.thresholdRange[0])}</span>
-            <span>{formatThreshold(cf.thresholdRange[1])}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-start gap-4 flex-wrap">
-        <div className={`rounded-lg border p-4 flex-1 min-w-[240px] ${verdictBorderClass}`}>
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`inline-flex items-center rounded px-2 py-0.5 font-mono text-xs font-bold ${verdictClasses}`}>
-              {verdictLabel}
-            </span>
-          </div>
-          <p className="font-sans text-sm leading-relaxed text-ink/90">
-            {verdictDesc}
-          </p>
-        </div>
-
-        {isModified && (
-          <motion.button
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            onClick={reset}
-            className="self-start rounded-md border border-line bg-surface px-4 py-2.5 font-mono text-xs text-ink-soft hover:bg-bg hover:text-ink transition-colors cursor-pointer shrink-0"
-          >
-            Reset to original
-          </motion.button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function LiveDecisionDemo() {
   const [activeId, setActiveId] = useState(scenarios[0].id);
   const scenario = scenarios.find((s) => s.id === activeId) || scenarios[0];
-  const { phase, visibleFields, visibleRules, visibleAudit } = useSequencer(activeId);
-  const isComplete = phase === "complete";
-  const hasCompletedOnceRef = useRef(false);
-  const [hasCompletedOnce, setHasCompletedOnce] = useState(false);
-
-  useEffect(() => {
-    if (phase === "complete" && !hasCompletedOnceRef.current) {
-      hasCompletedOnceRef.current = true;
-      setHasCompletedOnce(true);
-    }
-  }, [phase]);
-
-  useEffect(() => {
-    hasCompletedOnceRef.current = false;
-    setHasCompletedOnce(false);
-  }, [activeId]);
-
+  const { phase, visibleRules, auditIndex, start, reset } = useSequencer();
   const [traceTarget, setTraceTarget] = useState<TraceTarget>(null);
-  const highlightSet = getHighlightSet(scenario, traceTarget);
+  const [hasPulsed, setHasPulsed] = useState(false);
+
+  const [mobilePanel, setMobilePanel] = useState(0);
+
+  const handleRun = useCallback(() => {
+    setTraceTarget(null);
+    setHasPulsed(false);
+    start();
+  }, [start]);
+
+  const handleScenarioSwitch = useCallback(
+    (id: string) => {
+      setActiveId(id);
+      setTraceTarget(null);
+      setHasPulsed(false);
+      reset();
+    },
+    [reset]
+  );
 
   useEffect(() => {
-    if (phase !== "complete") {
-      setTraceTarget(null);
+    if (phase === "complete" && !hasPulsed) {
+      const t = setTimeout(() => setHasPulsed(true), 0);
+      return () => clearTimeout(t);
     }
-  }, [phase]);
+  }, [phase, hasPulsed]);
 
-  function handleVerdictClick() {
-    if (phase !== "complete") return;
-    setTraceTarget((prev) => (prev?.type === "verdict" ? null : { type: "verdict" }));
-  }
-
-  function handleRuleClick(ruleId: string) {
-    setTraceTarget((prev) =>
-      prev?.type === "rule" && prev.id === ruleId ? null : { type: "rule", id: ruleId }
-    );
-  }
-
-  function handleFieldClick(label: string) {
-    setTraceTarget((prev) =>
-      prev?.type === "field" && prev.label === label ? null : { type: "field", label }
-    );
-  }
-
-  function handleClearTrace() {
-    setTraceTarget(null);
-  }
-
-  function handlePanelClick(e: React.MouseEvent) {
-    if (traceTarget && e.target === e.currentTarget) {
-      setTraceTarget(null);
-    }
-  }
+  const panels = [
+    <EvidencePanel
+      key="evidence"
+      scenario={scenario}
+      phase={phase}
+      traceTarget={traceTarget}
+      onFieldClick={(id) =>
+        setTraceTarget(
+          traceTarget?.type === "field" && traceTarget.id === id
+            ? null
+            : { type: "field", id }
+        )
+      }
+    />,
+    <RulesPanel
+      key="rules"
+      scenario={scenario}
+      phase={phase}
+      visibleRules={visibleRules}
+      traceTarget={traceTarget}
+      onRuleClick={(id) =>
+        setTraceTarget(
+          traceTarget?.type === "rule" && traceTarget.id === id
+            ? null
+            : { type: "rule", id }
+        )
+      }
+    />,
+    <DecisionPanel
+      key="decision"
+      scenario={scenario}
+      phase={phase}
+      auditIndex={auditIndex}
+      traceTarget={traceTarget}
+      onDecisionClick={() =>
+        setTraceTarget(
+          traceTarget?.type === "decision" ? null : { type: "decision" }
+        )
+      }
+      onClearTrace={() => setTraceTarget(null)}
+      hasPulsed={hasPulsed}
+    />,
+  ];
 
   return (
-    <div className="space-y-4">
-      <div className="flex gap-1 rounded-lg border border-line bg-surface p-1">
-        {scenarios.map((s) => (
+    <div className="space-y-6" id="interactive-demo">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex flex-wrap gap-2">
+          {scenarios.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => handleScenarioSwitch(s.id)}
+              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                activeId === s.id
+                  ? "bg-accent text-white"
+                  : "bg-surface text-ink-soft border border-line hover:bg-bg"
+              }`}
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+
+        {phase === "idle" && (
           <button
-            key={s.id}
-            onClick={() => setActiveId(s.id)}
-            className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              activeId === s.id
-                ? "bg-accent text-white"
-                : "text-ink-soft hover:text-ink hover:bg-bg"
-            }`}
+            onClick={handleRun}
+            className="px-5 py-2 rounded bg-accent text-white text-sm font-semibold hover:bg-accent-light transition-colors"
           >
-            <span className="hidden sm:inline">{s.name}</span>
-            <span className="sm:hidden text-xs">
-              {s.id === "insurance-claim" ? "Claim" : "Credit"}
-            </span>
+            Run demo
           </button>
-        ))}
+        )}
+
+        {phase !== "idle" && phase !== "complete" && (
+          <span className="font-mono text-xs text-accent animate-pulse">
+            processing&hellip;
+          </span>
+        )}
+
+        {phase === "complete" && (
+          <span className="font-mono text-xs text-ink-soft">
+            done &middot; click any item to trace
+          </span>
+        )}
       </div>
 
-      <div className="hidden lg:grid grid-cols-3 gap-6" onClick={handlePanelClick}>
-        <EvidencePanel
-          scenario={scenario}
-          visibleFields={visibleFields}
-          traceTarget={traceTarget}
-          highlightSet={highlightSet}
-          onFieldClick={handleFieldClick}
-          isComplete={isComplete}
-        />
-        <RulesPanel
-          scenario={scenario}
-          visibleRules={visibleRules}
-          traceTarget={traceTarget}
-          highlightSet={highlightSet}
-          onRuleClick={handleRuleClick}
-          isComplete={isComplete}
-        />
-        <DecisionPanel
-          scenario={scenario}
-          phase={phase}
-          visibleAudit={visibleAudit}
-          traceTarget={traceTarget}
-          highlightSet={highlightSet}
-          onVerdictClick={handleVerdictClick}
-          onClearTrace={handleClearTrace}
-          hasCompletedOnce={hasCompletedOnce}
-        />
-      </div>
+      {phase === "idle" && (
+        <div className="rounded border border-line bg-surface p-8 text-center">
+          <p className="font-sans text-sm text-ink-soft">
+            Select a scenario above, then click &ldquo;Run demo&rdquo; to see the
+            decision pipeline in action.
+          </p>
+        </div>
+      )}
 
-      <div className="lg:hidden space-y-6">
-        <div className="rounded-lg border border-line bg-bg px-4 py-2">
-          <div className="flex items-center gap-2 text-xs font-mono text-ink-soft">
-            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-accent text-white text-[10px] font-bold">
-              1
-            </span>
-            Evidence
-            {phase !== "idle" && <span className="text-approve ml-auto">&#10003;</span>}
+      {phase !== "idle" && (
+        <>
+          <div className="hidden md:grid md:grid-cols-3 gap-4">
+            {panels.map((panel, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: i * 0.1 }}
+              >
+                {panel}
+              </motion.div>
+            ))}
           </div>
-        </div>
-        <div className="pl-6 border-l-2 border-line">
-          <EvidencePanel
-            scenario={scenario}
-            visibleFields={visibleFields}
-            traceTarget={traceTarget}
-            highlightSet={highlightSet}
-            onFieldClick={handleFieldClick}
-            isComplete={isComplete}
-          />
-        </div>
 
-        <div className="rounded-lg border border-line bg-bg px-4 py-2">
-          <div className="flex items-center gap-2 text-xs font-mono text-ink-soft">
-            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-accent text-white text-[10px] font-bold">
-              2
-            </span>
-            Rules
-            {(phase === "rules" || phase === "verdict" || phase === "auditing" || phase === "complete") && (
-              <span className="text-approve ml-auto">&#10003;</span>
-            )}
+          <div className="md:hidden">
+            <div className="flex border-b border-line mb-4">
+              {["Evidence", "Rules", "Decision"].map((label, i) => (
+                <button
+                  key={label}
+                  onClick={() => setMobilePanel(i)}
+                  className={`flex-1 py-2 text-xs font-semibold uppercase tracking-widest transition-colors ${
+                    mobilePanel === i
+                      ? "text-accent border-b-2 border-accent"
+                      : "text-ink-soft"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {panels[mobilePanel]}
           </div>
-        </div>
-        <div className="pl-6 border-l-2 border-line">
-          <RulesPanel
-            scenario={scenario}
-            visibleRules={visibleRules}
-            traceTarget={traceTarget}
-            highlightSet={highlightSet}
-            onRuleClick={handleRuleClick}
-            isComplete={isComplete}
-          />
-        </div>
+        </>
+      )}
 
-        <div className="rounded-lg border border-line bg-bg px-4 py-2">
-          <div className="flex items-center gap-2 text-xs font-mono text-ink-soft">
-            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-accent text-white text-[10px] font-bold">
-              3
-            </span>
-            Decision
-            {(phase === "auditing" || phase === "complete") && (
-              <span className="text-approve ml-auto">&#10003;</span>
-            )}
-          </div>
-        </div>
-        <div className="pl-6 border-l-2 border-line">
-          <DecisionPanel
-            scenario={scenario}
-            phase={phase}
-            visibleAudit={visibleAudit}
-            traceTarget={traceTarget}
-            highlightSet={highlightSet}
-            onVerdictClick={handleVerdictClick}
-            onClearTrace={handleClearTrace}
-            hasCompletedOnce={hasCompletedOnce}
-          />
-        </div>
-      </div>
-
-      <p className="text-[11px] text-ink-soft/60 leading-relaxed max-w-2xl mx-auto text-center font-sans">
-        Nothing here is generative. Field extraction is grounded to source lines in the original document.
-        The rule logic is the client&apos;s own and unedited by GroundSet. The only thing authored for this demo
-        is the animation.
+      <p className="font-sans text-[11px] text-ink-soft/60 text-center leading-relaxed max-w-2xl mx-auto">
+        Nothing here is generative. Field extraction is grounded to a line in the
+        source document. The decision path is the client&apos;s own deterministic
+        policy, unedited by Groundset. The only thing authored for this demo is the
+        animation.
       </p>
-
-      {isComplete && <CounterfactualSliders scenario={scenario} />}
     </div>
   );
 }

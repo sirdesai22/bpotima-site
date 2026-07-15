@@ -11,10 +11,10 @@
   --color-approve: #2F6D45;
   --color-escalate: #96660B;
   --color-reject: #8C3B32;
-  --color-highlight: #C8962E;
+  --color-highlight: #D4A843;
 
-  --font-sans: var(--font-sans, "IBM Plex Sans", sans-serif);
   --font-serif: var(--font-serif, "IBM Plex Serif", serif);
+  --font-sans: var(--font-sans, "IBM Plex Sans", sans-serif);
   --font-mono: var(--font-mono, "IBM Plex Mono", monospace);
 }
 
@@ -22,56 +22,4 @@ body {
   background: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
-}
-
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  border-radius: 2px;
-  outline: none;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  cursor: pointer;
-  border: none;
-}
-
-.slider-neutral::-webkit-slider-thumb {
-  background: var(--color-ink);
-}
-
-.slider-neutral::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  cursor: pointer;
-  border: none;
-  background: var(--color-ink);
-}
-
-.slider-neutral {
-  background: var(--color-line);
-}
-
-.slider-accent::-webkit-slider-thumb {
-  background: var(--color-accent);
-}
-
-.slider-accent::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  cursor: pointer;
-  border: none;
-  background: var(--color-accent);
-}
-
-.slider-accent {
-  background: var(--color-line);
 }

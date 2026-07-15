@@ -5,9 +5,9 @@ import Footer from "@/components/Footer";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "BPOptima — GroundSet",
+  title: "BPOptima — Sovereign Decision Infrastructure",
   description:
-    "GroundSet reads your evidence, applies your rules, and logs every step — so every decision is auditable, deterministic, and never a black box.",
+    "Domain-trained SLMs deployed inside your VPC. Understand → Decide → Route. ~99% accuracy, <100ms latency, zero data leakage.",
 };
 
 export default function RootLayout({
@@ -20,7 +20,7 @@ export default function RootLayout({
       lang="en"
       className={`${ibmPlexSerif.variable} ${ibmPlexSans.variable} ${ibmPlexMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col bg-bg text-ink">
         <Nav />
         <main className="flex-1">{children}</main>
         <Footer />
