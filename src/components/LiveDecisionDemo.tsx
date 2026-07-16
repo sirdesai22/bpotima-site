@@ -20,10 +20,17 @@ function useSequencer() {
     setPhase("extracting");
     setVisibleRules(0);
     setAuditIndex(0);
-    setTimeout(() => setPhase("rules"), 1200);
-    setTimeout(() => setPhase("verdict"), 1800);
-    setTimeout(() => setPhase("auditing"), 2400);
+    setTimeout(() => setPhase("rules"), 800);
+    setTimeout(() => setPhase("verdict"), 2600);
+    setTimeout(() => setPhase("auditing"), 3200);
   }, []);
+
+  useEffect(() => {
+    if (phase !== "rules") return;
+    if (visibleRules >= 20) return;
+    const t = setTimeout(() => setVisibleRules((i) => i + 1), 250);
+    return () => clearTimeout(t);
+  }, [phase, visibleRules]);
 
   useEffect(() => {
     if (phase !== "auditing") return;

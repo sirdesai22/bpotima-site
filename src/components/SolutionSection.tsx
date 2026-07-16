@@ -88,9 +88,9 @@ export default function SolutionSection() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5, delay: 0.4 }}
-          className="mt-12 rounded-xl border border-line bg-ink p-6 font-mono text-sm leading-relaxed overflow-x-auto"
+          className="mt-12 rounded-xl border border-line/80 bg-[#1a1d23] p-6 font-mono text-sm leading-relaxed overflow-x-auto"
         >
-          <pre className="text-ink-soft/90">
+          <pre className="text-gray-300">
             {jsonLines.map((line, i) => (
               <div
                 key={i}
@@ -101,23 +101,23 @@ export default function SolutionSection() {
               >
                 {i === 2 ? (
                   <>
-                    <span className="text-ink-soft/60">&quot;decision&quot;</span>
-                    <span className="text-ink-soft/60">: </span>
+                    <span className="text-gray-500">&quot;decision&quot;</span>
+                    <span className="text-gray-500">: </span>
                     <span className="text-approve font-semibold">&quot;APPROVE&quot;</span>
                     ,
                   </>
                 ) : i === 3 ? (
                   <>
-                    <span className="text-ink-soft/60">&quot;confidence&quot;</span>
-                    <span className="text-ink-soft/60">: </span>
+                    <span className="text-gray-500">&quot;confidence&quot;</span>
+                    <span className="text-gray-500">: </span>
                     <span className="text-approve">0.99</span>
                     ,
                   </>
                 ) : i === 4 ? (
                   <>
-                    <span className="text-ink-soft/60">&quot;latency_ms&quot;</span>
-                    <span className="text-ink-soft/60">: </span>
-                    <span className="text-accent-light">42</span>
+                    <span className="text-gray-500">&quot;latency_ms&quot;</span>
+                    <span className="text-gray-500">: </span>
+                    <span className="text-white">42</span>
                     ,
                   </>
                 ) : (

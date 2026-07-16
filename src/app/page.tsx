@@ -7,6 +7,7 @@ import ComparisonSection from "@/components/ComparisonSection";
 import ModelFamilySection from "@/components/ModelFamilySection";
 import RouterSection from "@/components/RouterSection";
 import IndustriesSection from "@/components/IndustriesSection";
+import BackedBySection from "@/components/BackedBySection";
 import EnterpriseSection from "@/components/EnterpriseSection";
 import TeamSection from "@/components/TeamSection";
 import ContactSection from "@/components/ContactSection";
@@ -39,6 +40,7 @@ export default function Home() {
       <ModelFamilySection />
       <RouterSection />
       <IndustriesSection />
+      <BackedBySection />
       <EnterpriseSection />
       <TeamSection />
       <ContactSection />

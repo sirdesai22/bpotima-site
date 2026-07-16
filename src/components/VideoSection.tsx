@@ -46,12 +46,6 @@ export default function VideoSection() {
           </div>
         </motion.div>
 
-        <p className="font-mono text-[11px] text-ink-soft/50 mt-4">
-          [FLAG: Verify whether demo footage is from a live deployment before
-          captioning as &ldquo;Recorded on a live financial-services deployment. No
-          synthetic data.&rdquo;]
-        </p>
-
         <motion.div
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
